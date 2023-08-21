@@ -95,9 +95,11 @@ DPDK_VER = 'dpdk-23.03'
 DPDK_TARGET = 'x86_64-native-linuxapp-gcc'
 
 kernel_release = cmd('uname -r', quiet=True).strip()
-
+CNDP_VER = 'cndp'
+CNDP_DIR = '%s/%s' % (DEPS_DIR, CNDP_VER)
 DPDK_DIR = '%s/%s' % (DEPS_DIR, DPDK_VER)
 DPDK_BUILD = '%s/build' % DPDK_DIR
+CNDP_BUILD = '%s/builddir' % CNDP_DIR
 
 extra_libs = set()
 cxx_flags = []
@@ -251,6 +253,20 @@ def download_dpdk(quiet=False):
         raise
 
 
+def clone_cndp(quiet=False):
+    if os.path.exists(CNDP_DIR):
+        if not quiet:
+            print('already downloaded to %s' % CNDP_DIR)
+        return
+    try:
+        cmd('mkdir -p %s' % CNDP_DIR)
+        repo = 'https://github.com/CloudNativeDataPlane/cndp.git'
+        print('Cloning %s ...  ' % repo)
+        cmd('git clone %s %s' % (repo, CNDP_DIR), shell=True)
+    except:
+        cmd('rm -rf %s' % (CNDP_DIR))
+        raise
+
 def configure_dpdk():
     print('Configuring DPDK...')
     meson_opts = '--buildtype=debugoptimized -Denable_driver_sdk=true'
@@ -286,6 +302,11 @@ def makeflags():
     makeflags.result = result
     return result
 
+def build_cndp():
+    clone_cndp(quiet=True)
+
+    print('Building CNDP...')
+    cmd('cd %s; make clean; make; CNE_DEST_DIR=/ make install' % CNDP_DIR, shell=True)
 
 def build_dpdk():
     check_essential()
@@ -384,6 +405,7 @@ def build_kmod():
 
 def build_all():
     build_dpdk()
+    build_cndp()
     build_bess()
     build_kmod()
     print('Done.')
@@ -443,6 +465,7 @@ def main():
         'all': build_all,
         'download_dpdk': download_dpdk,
         'dpdk': build_dpdk,
+        'cndp': build_cndp,
         'bess': build_bess,
         'kmod': build_kmod,
         'clean': do_clean,
