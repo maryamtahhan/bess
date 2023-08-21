@@ -425,7 +425,7 @@ class ExactMatchTable {
                                       MAX_FIELD_SIZE));
     }
 
-    if (mt_attr_name.length() > 0) {
+    if (mt_attr_name.length() > 0 && m != nullptr) {
       f->attr_id = m->AddMetadataAttr(mt_attr_name, f->size,
                                       metadata::Attribute::AccessMode::kRead);
       if (f->attr_id < 0) {

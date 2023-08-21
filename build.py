@@ -91,7 +91,7 @@ BESS_DIR = os.path.dirname(os.path.abspath(__file__))
 DEPS_DIR = '%s/deps' % BESS_DIR
 
 DPDK_URL = 'https://fast.dpdk.org/rel'
-DPDK_VER = 'dpdk-20.11.3'
+DPDK_VER = 'dpdk-23.03'
 DPDK_TARGET = 'x86_64-native-linuxapp-gcc'
 
 kernel_release = cmd('uname -r', quiet=True).strip()
@@ -253,7 +253,7 @@ def download_dpdk(quiet=False):
 
 def configure_dpdk():
     print('Configuring DPDK...')
-    meson_opts = '--buildtype=debugoptimized'
+    meson_opts = '--buildtype=debugoptimized -Denable_driver_sdk=true'
 
     arch = os.getenv('CPU')
     if arch:
@@ -295,9 +295,9 @@ def build_dpdk():
     if not os.path.exists('%s/build' % DPDK_DIR):
         configure_dpdk()
 
-    for f in glob.glob('%s/*.patch' % DEPS_DIR):
-        print('Applying patch %s' % f)
-        cmd('patch -d %s -N -p1 < %s || true' % (DPDK_DIR, f), shell=True)
+    # for f in glob.glob('%s/*.patch' % DEPS_DIR):
+    #     print('Applying patch %s' % f)
+    #     cmd('patch -d %s -N -p1 < %s || true' % (DPDK_DIR, f), shell=True)
 
     print('Building DPDK...')
     cmd('ninja -C %s install' % DPDK_BUILD)
