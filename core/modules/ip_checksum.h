@@ -36,6 +36,8 @@
 
 #include "../module.h"
 
+#include <rte_mbuf_core.h>
+
 // Compute IP checksum on packet
 class IPChecksum final : public Module {
  public:

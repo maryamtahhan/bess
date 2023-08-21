@@ -683,13 +683,13 @@ def _do_start(cli, opts):
         opts = []
 
     # need -E to pass GCOV_* env variables through
-    cmd = 'sudo -E %s/core/bessd -k %s' % (os.path.dirname(cli.this_dir),
+    cmd = '%s/core/bessd -k %s' % (os.path.dirname(cli.this_dir),
                                            ' '.join(opts))
 
     cli.bess.disconnect()
 
     try:
-        ret = os.system('sudo -n echo -n 2> /dev/null')
+        ret = os.system('echo -n 2> /dev/null')
         if os.WEXITSTATUS(ret) != 0:
             cli.fout.write('You need root privilege to launch BESS daemon, '
                            'but "sudo" requires a password for this account.'
