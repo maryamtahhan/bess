@@ -163,7 +163,7 @@ class ExactMatch final : public Module {
                                       MAX_FIELD_SIZE));
     }
 
-    if (mt_attr_name.length() > 0) {
+    if (mt_attr_name.length() > 0 && m != nullptr) {
       v->attr_id = m->AddMetadataAttr(
           mt_attr_name, v->size, bess::metadata::Attribute::AccessMode::kWrite);
       if (v->attr_id < 0) {

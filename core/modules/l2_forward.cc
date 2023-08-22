@@ -447,7 +447,7 @@ static void l2_forward_entry_test() {
 
 static void l2_forward_flush_test() {
   int ret;
-  struct l2_table l2tbl;
+  struct l2_table l2tbl = {};
 
   uint64_t addr1 = 0x0123456701234567;
   uint16_t index1 = 0x0123;
