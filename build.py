@@ -96,7 +96,9 @@ DPDK_TARGET = 'x86_64-native-linuxapp-gcc'
 
 kernel_release = cmd('uname -r', quiet=True).strip()
 CNDP_VER = 'cndp'
+XDP_VER  = 'xdp-tools'
 CNDP_DIR = '%s/%s' % (DEPS_DIR, CNDP_VER)
+XDP_DIR = '%s/%s' % (DEPS_DIR, XDP_VER)
 DPDK_DIR = '%s/%s' % (DEPS_DIR, DPDK_VER)
 DPDK_BUILD = '%s/build' % DPDK_DIR
 CNDP_BUILD = '%s/builddir' % CNDP_DIR
@@ -302,11 +304,42 @@ def makeflags():
     makeflags.result = result
     return result
 
+def clone_xdp(quiet=False):
+    if os.path.exists(XDP_DIR):
+        if not quiet:
+            print('already downloaded to %s' % XDP_DIR)
+        return
+    try:
+        cmd('mkdir -p %s' % XDP_DIR)
+        repo = 'https://github.com/xdp-project/xdp-tools.git'
+        print('Cloning %s ...  ' % repo)
+        cmd('git clone %s %s' % (repo, XDP_DIR), shell=True)
+    except:
+        cmd('rm -rf %s' % (XDP_DIR))
+        raise
+
+def build_xdp():
+    clone_xdp(quiet=True)
+    print('Building XDP...')
+    cmd('cd %s;git checkout  v1.2.2' % XDP_DIR, shell=True)
+    cmd('cd %s; ./configure' % XDP_DIR, shell=True)
+    cmd('cd %s; make -j; PREFIX=/usr make -j install' % XDP_DIR, shell=True)
+    os.environ["PKG_CONFIG_PATH"] = "$PKG_CONFIG_PATH:/usr/lib/pkgconfig"
+
 def build_cndp():
     clone_cndp(quiet=True)
 
     print('Building CNDP...')
-    cmd('cd %s; make clean; make; CNE_DEST_DIR=/ make install' % CNDP_DIR, shell=True)
+    cmd('cd %s;git checkout 19d74af9b37c4150a3a054a394f7f13eb95ed0b8'% CNDP_DIR, shell=True)
+  #  cmd('cd %s; git apply %s/cndp-static-build.patch' % (CNDP_DIR, DEPS_DIR), shell=True)
+    cmd('cd %s; make rebuild install' % CNDP_DIR, shell=True)
+   # cmd('cd %s; make static_build=1 rebuild install' % CNDP_DIR, shell=True)
+    cmd('cd %s; make static_build=1 rebuild install' % CNDP_DIR, shell=True)
+    cmd('cp %s/usr/local/lib/x86_64-linux-gnu/*.so /usr/lib/' % CNDP_DIR, shell=True)
+    cmd('cp %s/usr/local/lib/x86_64-linux-gnu/*.a /usr/lib/' % CNDP_DIR, shell=True)
+    cmd('cp %s/usr/local/lib/pkgconfig/libcndp.pc /usr/lib/pkgconfig/' % CNDP_DIR, shell=True)
+    os.environ["PKG_CONFIG_PATH"] = "$PKG_CONFIG_PATH:/usr/local/lib/pkgconfig"
+    os.environ["LD_LIBRARY_PATH"] = "$LD_LIBRARY_PATH:/usr/local/lib/x86_64-linux-gnu"
 
 def build_dpdk():
     check_essential()
@@ -405,6 +438,7 @@ def build_kmod():
 
 def build_all():
     build_dpdk()
+    build_xdp()
     build_cndp()
     build_bess()
     build_kmod()
@@ -466,6 +500,7 @@ def main():
         'download_dpdk': download_dpdk,
         'dpdk': build_dpdk,
         'cndp': build_cndp,
+        'xdp': build_xdp,
         'bess': build_bess,
         'kmod': build_kmod,
         'clean': do_clean,
