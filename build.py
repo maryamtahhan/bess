@@ -95,6 +95,8 @@ DPDK_VER = 'dpdk-23.03'
 DPDK_TARGET = 'x86_64-native-linuxapp-gcc'
 
 kernel_release = cmd('uname -r', quiet=True).strip()
+XDP_VER = 'xdp-tools'
+XDP_DIR = '%s/%s' % (DEPS_DIR, XDP_VER)
 CNDP_VER = 'cndp'
 CNDP_DIR = '%s/%s' % (DEPS_DIR, CNDP_VER)
 DPDK_DIR = '%s/%s' % (DEPS_DIR, DPDK_VER)
@@ -263,6 +265,7 @@ def clone_cndp(quiet=False):
         repo = 'https://github.com/CloudNativeDataPlane/cndp.git'
         print('Cloning %s ...  ' % repo)
         cmd('git clone %s %s' % (repo, CNDP_DIR), shell=True)
+
     except:
         cmd('rm -rf %s' % (CNDP_DIR))
         raise
@@ -302,11 +305,38 @@ def makeflags():
     makeflags.result = result
     return result
 
+def clone_xdp(quiet=False):
+    if os.path.exists(XDP_DIR):
+        if not quiet:
+            print('already downloaded to %s' % XDP_DIR)
+        return
+    try:
+        cmd('mkdir -p %s' % XDP_DIR)
+        repo = 'https://github.com/xdp-project/xdp-tools.git'
+        print('Cloning %s ...  ' % repo)
+        cmd('git clone %s %s' % (repo, XDP_DIR), shell=True)
+    except:
+        cmd('rm -rf %s' % (XDP_DIR))
+        raise
+
+def build_xdp():
+    clone_xdp(quiet=True)
+    print('Building XDP...')
+    cmd('cd %s;git checkout  v1.2.2' % XDP_DIR, shell=True)
+    cmd('cd %s; ./configure' % XDP_DIR, shell=True)
+    cmd('cd %s;make CFLAGS+=-fpic; PREFIX=/usr make install' % XDP_DIR, shell=True)
+    os.environ["PKG_CONFIG_PATH"] = "$PKG_CONFIG_PATH:/usr/lib/pkgconfig"
+
 def build_cndp():
     clone_cndp(quiet=True)
 
     print('Building CNDP...')
-    cmd('cd %s; make clean; make; CNE_DEST_DIR=/ make install' % CNDP_DIR, shell=True)
+    cmd('cd %s; git checkout 92d7750900db229c04d432ecafa073d6cf34aeec' % CNDP_DIR, shell=True)
+    cmd('cd %s; git reset HEAD --hard' % CNDP_DIR, shell=True)
+    cmd('cd %s; git apply %s/cndp-static-build.patch' % (CNDP_DIR, DEPS_DIR), shell=True)
+    cmd('cd %s; CNE_DEST_DIR=/ make static_build=1 -j rebuild install' % CNDP_DIR, shell=True)
+    os.environ["PKG_CONFIG_PATH"] = "$PKG_CONFIG_PATH:/usr/local/lib/pkgconfig"
+    os.environ["LD_LIBRARY_PATH"] = "$LD_LIBRARY_PATH:/usr/local/lib/x86_64-linux-gnu"
 
 def build_dpdk():
     check_essential()
@@ -316,9 +346,9 @@ def build_dpdk():
     if not os.path.exists('%s/build' % DPDK_DIR):
         configure_dpdk()
 
-    # for f in glob.glob('%s/*.patch' % DEPS_DIR):
-    #     print('Applying patch %s' % f)
-    #     cmd('patch -d %s -N -p1 < %s || true' % (DPDK_DIR, f), shell=True)
+    for f in glob.glob('%s/dpdk-static-build.patch' % DEPS_DIR):
+        print('Applying patch %s' % f)
+        cmd('patch -d %s -N -p1 < %s || true' % (DPDK_DIR, f), shell=True)
 
     print('Building DPDK...')
     cmd('ninja -C %s install' % DPDK_BUILD)
@@ -373,6 +403,10 @@ def build_bess():
     if not os.path.exists('%s/build' % DPDK_DIR):
         build_dpdk()
 
+    if not os.path.exists('%s/builddir' % CNDP_DIR):
+        build_xdp()
+        build_cndp()
+
     generate_protobuf_files()
 
     print('Building BESS daemon...')
@@ -405,6 +439,7 @@ def build_kmod():
 
 def build_all():
     build_dpdk()
+    build_xdp()
     build_cndp()
     build_bess()
     build_kmod()
@@ -422,12 +457,15 @@ def do_clean():
             '{path}/*_pb2_grpc.py* {path}/ports/*_pb2_grpc.py* '
             '{path}/__pycache__ {path}/ports/__pycache__'.format(path=path))
     cmd('rm -rf %s/build' % DPDK_DIR)
+    cmd('rm -rf %s/builddir' % CNDP_DIR)
 
 
 def do_dist_clean():
     do_clean()
     print('Removing 3rd-party libraries...')
     cmd('rm -rf %s' % (DPDK_DIR))
+    cmd('rm -rf %s' % (CNDP_DIR))
+    cmd('rm -rf %s' % (XDP_DIR))
 
 
 def print_usage(parser):
@@ -466,6 +504,7 @@ def main():
         'download_dpdk': download_dpdk,
         'dpdk': build_dpdk,
         'cndp': build_cndp,
+        'xdp': build_xdp,
         'bess': build_bess,
         'kmod': build_kmod,
         'clean': do_clean,
