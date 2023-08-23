@@ -331,10 +331,8 @@ def build_cndp():
     clone_cndp(quiet=True)
 
     print('Building CNDP...')
-    cmd('cd %s; git checkout 92d7750900db229c04d432ecafa073d6cf34aeec' % CNDP_DIR, shell=True)
-    cmd('cd %s; git reset HEAD --hard' % CNDP_DIR, shell=True)
-    cmd('cd %s; git apply %s/cndp-static-build.patch' % (CNDP_DIR, DEPS_DIR), shell=True)
-    cmd('cd %s; CNE_DEST_DIR=/ make static_build=1 -j rebuild install' % CNDP_DIR, shell=True)
+    cmd('make -C %s CNE_DEST_DIR=/ static_build=1 -j rebuild' % CNDP_DIR)
+    cmd('make -C %s CNE_DEST_DIR=/ static_build=1 -j install' % CNDP_DIR)
     os.environ["PKG_CONFIG_PATH"] = "$PKG_CONFIG_PATH:/usr/local/lib/pkgconfig"
     os.environ["LD_LIBRARY_PATH"] = "$LD_LIBRARY_PATH:/usr/local/lib/x86_64-linux-gnu"
 
