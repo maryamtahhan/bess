@@ -122,7 +122,6 @@ void init_eal(int dpdk_mb_per_socket, std::string nonworker_corelist) {
       // since we don't want to interfere with other DPDK applications.
       "--no-shconf",
       // TODO(sangjin) switch to dynamic memory mode
-      "--legacy-mem",
       "--no-pci",
   };
 
