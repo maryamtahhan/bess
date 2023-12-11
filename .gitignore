@@ -10,7 +10,8 @@ core/kmod/.cache.mk
 *.retry
 *.cache.mk
 dictionary.dic
-
+deps/cndp*
+deps/xdp-tools*
 # Vagrant stores temporary files in env/.vagrant
 env/.vagrant
 

@@ -1,0 +1,755 @@
+From 7a6b307c3c433a2e4f73366ad4317643a64e44dd Mon Sep 17 00:00:00 2001
+From: Maryam Tahhan <mtahhan@redhat.com>
+Date: Mon, 4 Dec 2023 04:49:20 -0500
+Subject: [v3] net/af_xdp: enable uds-path instead of use_cni
+
+With the original 'use_cni' implementation, (using a
+hardcoded socket rather than a configurable one),
+if a single pod is requesting multiple net devices
+and these devices are from different pools, then
+the container attempts to mount all the netdev UDSes
+in the pod as /tmp/afxdp.sock. Which means that at best
+only 1 netdev will handshake correctly with the AF_XDP
+DP. This patch addresses this by making the socket
+parameter configurable using a new vdev param called
+'uds_path' and removing the previous 'use_cni' param.
+Tested with the AF_XDP DP CNI PR 81, single and multiple
+interfaces.
+
+v3:
+* Remove `use_cni` vdev argument as it's no longer needed.
+* Update incorrect CNI references for the AF_XDP DP in the
+  documentation.
+* Update the documentation to run a simple example with the
+  AF_XDP DP plugin in K8s.
+
+v2:
+* Rename sock_path to uds_path.
+* Update documentation to reflect when CAP_BPF is needed.
+* Fix testpmd arguments in the provided example for Pods.
+* Use AF_XDP API to update the xskmap entry.
+
+Signed-off-by: Maryam Tahhan <mtahhan@redhat.com>
+---
+ doc/guides/howto/af_xdp_cni.rst     | 334 +++++++++++++++-------------
+ drivers/net/af_xdp/rte_eth_af_xdp.c |  76 +++----
+ 2 files changed, 216 insertions(+), 194 deletions(-)
+
+diff --git a/doc/guides/howto/af_xdp_cni.rst b/doc/guides/howto/af_xdp_cni.rst
+index a1a6d5b99c..b71fef61c7 100644
+--- a/doc/guides/howto/af_xdp_cni.rst
++++ b/doc/guides/howto/af_xdp_cni.rst
+@@ -1,71 +1,65 @@
+ .. SPDX-License-Identifier: BSD-3-Clause
+    Copyright(c) 2023 Intel Corporation.
+ 
+-Using a CNI with the AF_XDP driver
+-==================================
++Using the AF_XDP Device Plugin with the AF_XDP driver
++======================================================
+ 
+ Introduction
+ ------------
+ 
+-CNI, the Container Network Interface, is a technology for configuring
+-container network interfaces
+-and which can be used to setup Kubernetes networking.
++The `AF_XDP Device Plugin for Kubernetes`_ is a project that provisions
++and advertises interfaces (that can be used with AF_XDP) to Kubernetes.
++The project also includes a `CNI`_.
++
+ AF_XDP is a Linux socket Address Family that enables an XDP program
+ to redirect packets to a memory buffer in userspace.
+ 
+-This document explains how to enable the `AF_XDP Plugin for Kubernetes`_ within
+-a DPDK application using the :doc:`../nics/af_xdp` to connect and use these technologies.
+-
+-.. _AF_XDP Plugin for Kubernetes: https://github.com/intel/afxdp-plugins-for-kubernetes
++This document explains how to use the `AF_XDP Device Plugin for Kubernetes`_ with
++a DPDK :doc:`../nics/af_xdp` based application running in a Pod.
+ 
++.. _AF_XDP Device Plugin for Kubernetes: https://github.com/intel/afxdp-plugins-for-kubernetes
++.. _CNI: https://github.com/containernetworking/cni
+ 
+ Background
+ ----------
+ 
+-The standard :doc:`../nics/af_xdp` initialization process involves loading an eBPF program
+-onto the kernel netdev to be used by the PMD.
+-This operation requires root or escalated Linux privileges
+-and thus prevents the PMD from working in an unprivileged container.
+-The AF_XDP CNI plugin handles this situation
+-by providing a device plugin that performs the program loading.
+-
+-At a technical level the CNI opens a Unix Domain Socket and listens for a client
+-to make requests over that socket.
+-A DPDK application acting as a client connects and initiates a configuration "handshake".
+-The client then receives a file descriptor which points to the XSKMAP
+-associated with the loaded eBPF program.
+-The XSKMAP is a BPF map of AF_XDP sockets (XSK).
+-The client can then proceed with creating an AF_XDP socket
+-and inserting that socket into the XSKMAP pointed to by the descriptor.
+-
+-The EAL vdev argument ``use_cni`` is used to indicate that the user wishes
+-to run the PMD in unprivileged mode and to receive the XSKMAP file descriptor
+-from the CNI.
+-When this flag is set,
+-the ``XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD`` libbpf flag
+-should be used when creating the socket
+-to instruct libbpf not to load the default libbpf program on the netdev.
+-Instead the loading is handled by the CNI.
++The standard :doc:`../nics/af_xdp` initialization process involves
++loading an eBPF program onto the kernel netdev to be used by the PMD.
++This operation requires root or escalated Linux privileges and prevents
++the PMD from working in an unprivileged container. The AF_XDP Device plugin
++addresses this situation by providing an entity that manages eBPF program
++lifecycle for Pod interfaces that wish to use AF_XDP, this in turn allows
++the pod to be used without privilege escalation.
++
++In order for the pod to run without privilege escalation, the AF_XDP DP
++creates a Unix Domain Socket (UDS) and listens for Pods to make requests
++for XSKMAP(s) File Descriptors (FDs) for interfaces in their network namespace.
++In other words, the DPDK application running in the Pod connects to this UDS and
++initiates a "handshake" to retrieve the XSKMAP(s) FD(s). Upon a successful "handshake",
++the DPDK application receives the FD(s) for the XSKMAP(s) associated with the relevant
++netdevs. The DPDK application can then create the AF_XDP socket(s), and attach
++the socket(s) to the netdev queue(s) by inserting the socket(s) into the XSKMAP(s).
++
++The EAL vdev argument ``uds_path`` is used to indicate that the user
++wishes to run the AF_XDP PMD in unprivileged mode and to receive the XSKMAP
++FD from the AF_XDP DP. When this param is used, the
++``XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD`` libbpf flag is used when creating the
++AF_XDP socket to instruct libbpf/libxdp not to load the default eBPF redirect
++program for AF_XDP on the netdev. Instead the lifecycle management of the eBPF
++program is handled by the AF_XDP DP.
+ 
+ .. note::
+ 
+-   The Unix Domain Socket file path appear in the end user is "/tmp/afxdp.sock".
+-
++   The UDS file path inside the pod appears at "/tmp/afxdp_dp/<netdev>/afxdp.sock".
+ 
+ Prerequisites
+ -------------
+ 
+-Docker and container prerequisites:
+-
+-* Set up the device plugin
+-  as described in the instructions for `AF_XDP Plugin for Kubernetes`_.
+-
+-* The Docker image should contain the libbpf and libxdp libraries,
+-  which are dependencies for AF_XDP,
+-  and should include support for the ``ethtool`` command.
++Device Plugin and DPDK container prerequisites:
++* Create a DPDK container image.
+ 
+-* The Pod should have enabled the capabilities ``CAP_NET_RAW`` and ``CAP_BPF``
+-  for AF_XDP along with support for hugepages.
++* Set up the device plugin and prepare the Pod Spec as described in
++  the instructions for `AF_XDP Device Plugin for Kubernetes`_.
+ 
+ * Increase locked memory limit so containers have enough memory for packet buffers.
+   For example:
+@@ -85,115 +79,142 @@ Docker and container prerequisites:
+ Example
+ -------
+ 
+-Howto run dpdk-testpmd with CNI plugin:
++How to run dpdk-testpmd with AF_XDP Device plugin:
+ 
+-* Clone the CNI plugin
++* Clone the AF_XDP Device plugin
+ 
+   .. code-block:: console
+ 
+      # git clone https://github.com/intel/afxdp-plugins-for-kubernetes.git
+ 
+-* Build the CNI plugin
++* Build the AF_XDP Device plugin and the CNI
+ 
+   .. code-block:: console
+ 
+      # cd afxdp-plugins-for-kubernetes/
+-     # make build
++     # make image
+ 
+-  .. note::
++* Make sure to modify the image used by the `daemonset.yml`_ file in the deployments directory with
++  the following configuration:
+ 
+-     CNI plugin has a dependence on the config.json.
++   .. _daemonset.yml : https://github.com/intel/afxdp-plugins-for-kubernetes/blob/main/deployments/daemonset.yml
+ 
+-  Sample Config.json
++  .. code-block:: yaml
+ 
+-  .. code-block:: json
++    image: afxdp-device-plugin:latest
+ 
+-     {
+-        "logLevel":"debug",
+-        "logFile":"afxdp-dp-e2e.log",
+-        "pools":[
+-           {
+-              "name":"e2e",
+-              "mode":"primary",
+-              "timeout":30,
+-              "ethtoolCmds" : ["-L -device- combined 1"],
+-              "devices":[
+-                 {
+-                    "name":"ens785f0"
+-                 }
+-              ]
+-           }
+-        ]
+-     }
++  .. note::
+ 
+-  For further reference please use the `config.json`_
++    This will select the AF_XDP DP image that was built locally. Detailed configuration
++    options can be found in the AF_XDP Device Plugin `readme`_ .
+ 
+-  .. _config.json: https://github.com/intel/afxdp-plugins-for-kubernetes/blob/v0.0.2/test/e2e/config.json
++  .. _readme: https://github.com/intel/afxdp-plugins-for-kubernetes#readme
+ 
+-* Create the Network Attachment definition
++* Deploy the AF_XDP Device Plugin and CNI
+ 
+   .. code-block:: console
+ 
+-     # kubectl create -f nad.yaml
++    # kubectl create -f deployments/daemonset.yml
++
++* Create a Network Attachment Definition (NAD)
++
++  .. code-block:: console
++
++    # kubectl create -f nad.yaml
+ 
+   Sample nad.yml
+ 
+   .. code-block:: yaml
+ 
+-      apiVersion: "k8s.cni.cncf.io/v1"
+-      kind: NetworkAttachmentDefinition
+-      metadata:
+-        name: afxdp-e2e-test
+-        annotations:
+-          k8s.v1.cni.cncf.io/resourceName: afxdp/e2e
+-      spec:
+-        config: '{
+-            "cniVersion": "0.3.0",
+-            "type": "afxdp",
+-            "mode": "cdq",
+-            "logFile": "afxdp-cni-e2e.log",
+-            "logLevel": "debug",
+-            "ipam": {
+-              "type": "host-local",
+-              "subnet": "192.168.1.0/24",
+-              "rangeStart": "192.168.1.200",
+-              "rangeEnd": "192.168.1.216",
+-              "routes": [
+-                { "dst": "0.0.0.0/0" }
+-              ],
+-              "gateway": "192.168.1.1"
+-            }
+-          }'
+-
+-  For further reference please use the `nad.yaml`_
+-
+-  .. _nad.yaml: https://github.com/intel/afxdp-plugins-for-kubernetes/blob/v0.0.2/test/e2e/nad.yaml
+-
+-* Build the Docker image
++    apiVersion: "k8s.cni.cncf.io/v1"
++    kind: NetworkAttachmentDefinition
++    metadata:
++      name: afxdp-network
++      annotations:
++        k8s.v1.cni.cncf.io/resourceName: afxdp/myPool
++    spec:
++      config: '{
++          "cniVersion": "0.3.0",
++          "type": "afxdp",
++          "mode": "primary",
++          "logFile": "afxdp-cni.log",
++          "logLevel": "debug",
++          "ethtoolCmds" : ["-N -device- rx-flow-hash udp4 fn",
++                           "-N -device- flow-type udp4 dst-port 2152 action 22"
++                        ],
++          "ipam": {
++            "type": "host-local",
++            "subnet": "192.168.1.0/24",
++            "rangeStart": "192.168.1.200",
++            "rangeEnd": "192.168.1.220",
++            "routes": [
++              { "dst": "0.0.0.0/0" }
++            ],
++            "gateway": "192.168.1.1"
++          }
++        }'
++
++  For further reference please use the example provided by the AF_XDP DP `nad.yaml`_
++
++  .. _nad.yaml: https://github.com/intel/afxdp-plugins-for-kubernetes/blob/main/examples/network-attachment-definition.yaml
++
++* Build a DPDK container image (using Docker)
+ 
+   .. code-block:: console
+ 
+-     # docker build -t afxdp-e2e-test -f Dockerfile .
++    # docker build -t dpdk -f Dockerfile .
+ 
+-  Sample Dockerfile:
++  Sample Dockerfile (should be placed in top level DPDK directory):
+ 
+   .. code-block:: console
+ 
+-     FROM ubuntu:20.04
+-     RUN apt-get update -y
+-     RUN apt install build-essential libelf-dev -y
+-     RUN apt-get install iproute2  acl -y
+-     RUN apt install python3-pyelftools ethtool -y
+-     RUN apt install libnuma-dev libjansson-dev libpcap-dev net-tools -y
+-     RUN apt-get install clang llvm -y
+-     COPY ./libbpf<version>.tar.gz /tmp
+-     RUN cd /tmp && tar -xvmf libbpf<version>.tar.gz && cd libbpf/src && make install
+-     COPY ./libxdp<version>.tar.gz /tmp
+-     RUN cd /tmp && tar -xvmf libxdp<version>.tar.gz && cd libxdp && make install
++    FROM fedora:38
++
++    # Setup container to build DPDK applications
++    RUN dnf -y upgrade && dnf -y install \
++        libbsd-devel \
++        numactl-libs \
++        libbpf-devel \
++        libbpf \
++        meson \
++        ninja-build \
++        libxdp-devel \
++        libxdp \
++        numactl-devel \
++        python3-pyelftools \
++        python38 \
++        iproute
++    RUN dnf groupinstall -y 'Development Tools'
++
++    # Create DPDK dir and copy over sources
++    WORKDIR /dpdk
++    COPY app app
++    COPY builddir  builddir
++    COPY buildtools buildtools
++    COPY config config
++    COPY devtools devtools
++    COPY drivers drivers
++    COPY dts dts
++    COPY examples examples
++    COPY kernel kernel
++    COPY lib lib
++    COPY license license
++    COPY MAINTAINERS MAINTAINERS
++    COPY Makefile Makefile
++    COPY meson.build meson.build
++    COPY meson_options.txt meson_options.txt
++    COPY usertools usertools
++    COPY VERSION VERSION
++    COPY ABI_VERSION ABI_VERSION
++    COPY doc doc
++
++    # Build DPDK
++    RUN meson setup build
++    RUN ninja -C build
+ 
+   .. note::
+ 
+-     All the files that need to COPY-ed should be in the same directory as the Dockerfile
++    Ensure the Dockerfile is placed in the top level DPDK directory.
+ 
+ * Run the Pod
+ 
+@@ -205,49 +226,52 @@ Howto run dpdk-testpmd with CNI plugin:
+ 
+   .. code-block:: yaml
+ 
+-     apiVersion: v1
+-     kind: Pod
+-     metadata:
+-       name: afxdp-e2e-test
+-       annotations:
+-         k8s.v1.cni.cncf.io/networks: afxdp-e2e-test
+-     spec:
+-       containers:
+-       - name: afxdp
+-         image: afxdp-e2e-test:latest
+-         imagePullPolicy: Never
+-         env:
+-         - name: LD_LIBRARY_PATH
+-           value: /usr/lib64/:/usr/local/lib/
+-         command: ["tail", "-f", "/dev/null"]
+-         securityContext:
++    apiVersion: v1
++    kind: Pod
++    metadata:
++     name: dpdk
++     annotations:
++       k8s.v1.cni.cncf.io/networks: afxdp-network
++    spec:
++      containers:
++      - name: testpmd
++        image: dpdk:latest
++        command: ["tail", "-f", "/dev/null"]
++        securityContext:
+           capabilities:
+-             add:
+-               - CAP_NET_RAW
+-               - CAP_BPF
+-         resources:
+-           requests:
+-             hugepages-2Mi: 2Gi
+-             memory: 2Gi
+-             afxdp/e2e: '1'
+-           limits:
+-             hugepages-2Mi: 2Gi
+-             memory: 2Gi
+-             afxdp/e2e: '1'
++            add:
++              - NET_RAW
++              - IPC_LOCK
++        resources:
++          requests:
++            afxdp/myPool: '1'
++          limits:
++            hugepages-1Gi: 2Gi
++            cpu: 2
++            memory: 256Mi
++            afxdp/myPool: '1'
++        volumeMounts:
++        - name: hugepages
++          mountPath: /dev/hugepages
++      volumes:
++      - name: hugepages
++        emptyDir:
++          medium: HugePages
+ 
+   For further reference please use the `pod.yaml`_
+ 
+-  .. _pod.yaml: https://github.com/intel/afxdp-plugins-for-kubernetes/blob/v0.0.2/test/e2e/pod-1c1d.yaml
++  .. _pod.yaml: https://github.com/intel/afxdp-plugins-for-kubernetes/blob/main/examples/pod-spec.yaml
+ 
+-* Run DPDK with a command like the following:
++.. note::
+ 
+-  .. code-block:: console
++   For Kernel versions older than 5.19 `CAP_BPF` is also required in
++   the container capabilities stanza.
+ 
+-     kubectl exec -i <Pod name> --container <containers name> -- \
+-           /<Path>/dpdk-testpmd -l 0,1 --no-pci \
+-           --vdev=net_af_xdp0,use_cni=1,iface=<interface name> \
+-           -- --no-mlockall --in-memory
++* Run DPDK with a command like the following:
+ 
+-For further reference please use the `e2e`_ test case in `AF_XDP Plugin for Kubernetes`_
++  .. code-block:: console
+ 
+-  .. _e2e: https://github.com/intel/afxdp-plugins-for-kubernetes/tree/v0.0.2/test/e2e
++     kubectl exec -i dpdk --container testpmd -- \
++           ./build/app/dpdk-testpmd -l 0-2 --no-pci --main-lcore=2 \
++           --vdev net_af_xdp,iface=<interface name>,start_queue=22,queue_count=1,uds_path=/tmp/afxdp_dp/<interface name>/afxdp.sock \
++           -- -i --a --nb-cores=2 --rxq=1 --txq=1 --forward-mode=macswap;
+diff --git a/drivers/net/af_xdp/rte_eth_af_xdp.c b/drivers/net/af_xdp/rte_eth_af_xdp.c
+index 353c8688ec..c13b8038f8 100644
+--- a/drivers/net/af_xdp/rte_eth_af_xdp.c
++++ b/drivers/net/af_xdp/rte_eth_af_xdp.c
+@@ -88,7 +88,6 @@ RTE_LOG_REGISTER_DEFAULT(af_xdp_logtype, NOTICE);
+ #define UDS_MAX_CMD_LEN			64
+ #define UDS_MAX_CMD_RESP		128
+ #define UDS_XSK_MAP_FD_MSG		"/xsk_map_fd"
+-#define UDS_SOCK			"/tmp/afxdp.sock"
+ #define UDS_CONNECT_MSG			"/connect"
+ #define UDS_HOST_OK_MSG			"/host_ok"
+ #define UDS_HOST_NAK_MSG		"/host_nak"
+@@ -170,7 +169,7 @@ struct pmd_internals {
+ 	char prog_path[PATH_MAX];
+ 	bool custom_prog_configured;
+ 	bool force_copy;
+-	bool use_cni;
++	char uds_path[PATH_MAX];
+ 	struct bpf_map *map;
+ 
+ 	struct rte_ether_addr eth_addr;
+@@ -190,7 +189,7 @@ struct pmd_process_private {
+ #define ETH_AF_XDP_PROG_ARG			"xdp_prog"
+ #define ETH_AF_XDP_BUDGET_ARG			"busy_budget"
+ #define ETH_AF_XDP_FORCE_COPY_ARG		"force_copy"
+-#define ETH_AF_XDP_USE_CNI_ARG			"use_cni"
++#define ETH_AF_XDP_USE_CNI_UDS_PATH_ARG	"uds_path"
+ 
+ static const char * const valid_arguments[] = {
+ 	ETH_AF_XDP_IFACE_ARG,
+@@ -200,7 +199,7 @@ static const char * const valid_arguments[] = {
+ 	ETH_AF_XDP_PROG_ARG,
+ 	ETH_AF_XDP_BUDGET_ARG,
+ 	ETH_AF_XDP_FORCE_COPY_ARG,
+-	ETH_AF_XDP_USE_CNI_ARG,
++	ETH_AF_XDP_USE_CNI_UDS_PATH_ARG,
+ 	NULL
+ };
+ 
+@@ -1351,7 +1350,7 @@ configure_preferred_busy_poll(struct pkt_rx_queue *rxq)
+ }
+ 
+ static int
+-init_uds_sock(struct sockaddr_un *server)
++init_uds_sock(struct sockaddr_un *server, const char *uds_path)
+ {
+ 	int sock;
+ 
+@@ -1362,7 +1361,7 @@ init_uds_sock(struct sockaddr_un *server)
+ 	}
+ 
+ 	server->sun_family = AF_UNIX;
+-	strlcpy(server->sun_path, UDS_SOCK, sizeof(server->sun_path));
++	strlcpy(server->sun_path, uds_path, sizeof(server->sun_path));
+ 
+ 	if (connect(sock, (struct sockaddr *)server, sizeof(struct sockaddr_un)) < 0) {
+ 		close(sock);
+@@ -1382,7 +1381,7 @@ struct msg_internal {
+ };
+ 
+ static int
+-send_msg(int sock, char *request, int *fd)
++send_msg(int sock, char *request, int *fd, const char *uds_path)
+ {
+ 	int snd;
+ 	struct iovec iov;
+@@ -1393,7 +1392,7 @@ send_msg(int sock, char *request, int *fd)
+ 
+ 	memset(&dst, 0, sizeof(dst));
+ 	dst.sun_family = AF_UNIX;
+-	strlcpy(dst.sun_path, UDS_SOCK, sizeof(dst.sun_path));
++	strlcpy(dst.sun_path, uds_path, sizeof(dst.sun_path));
+ 
+ 	/* Initialize message header structure */
+ 	memset(&msgh, 0, sizeof(msgh));
+@@ -1471,7 +1470,7 @@ read_msg(int sock, char *response, struct sockaddr_un *s, int *fd)
+ 
+ static int
+ make_request_cni(int sock, struct sockaddr_un *server, char *request,
+-		 int *req_fd, char *response, int *out_fd)
++		 int *req_fd, char *response, int *out_fd, const char *uds_path)
+ {
+ 	int rval;
+ 
+@@ -1483,7 +1482,7 @@ make_request_cni(int sock, struct sockaddr_un *server, char *request,
+ 	if (req_fd == NULL)
+ 		rval = write(sock, request, strlen(request));
+ 	else
+-		rval = send_msg(sock, request, req_fd);
++		rval = send_msg(sock, request, req_fd, uds_path);
+ 
+ 	if (rval < 0) {
+ 		AF_XDP_LOG(ERR, "Write error %s\n", strerror(errno));
+@@ -1507,7 +1506,7 @@ check_response(char *response, char *exp_resp, long size)
+ }
+ 
+ static int
+-get_cni_fd(char *if_name)
++get_cni_fd(char *if_name, const char *uds_path)
+ {
+ 	char request[UDS_MAX_CMD_LEN], response[UDS_MAX_CMD_RESP];
+ 	char hostname[MAX_LONG_OPT_SZ], exp_resp[UDS_MAX_CMD_RESP];
+@@ -1520,14 +1519,14 @@ get_cni_fd(char *if_name)
+ 		return -1;
+ 
+ 	memset(&server, 0, sizeof(server));
+-	sock = init_uds_sock(&server);
++	sock = init_uds_sock(&server, uds_path);
+ 	if (sock < 0)
+ 		return -1;
+ 
+ 	/* Initiates handshake to CNI send: /connect,hostname */
+ 	snprintf(request, sizeof(request), "%s,%s", UDS_CONNECT_MSG, hostname);
+ 	memset(response, 0, sizeof(response));
+-	if (make_request_cni(sock, &server, request, NULL, response, &out_fd) < 0) {
++	if (make_request_cni(sock, &server, request, NULL, response, &out_fd, uds_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Error in processing cmd [%s]\n", request);
+ 		goto err_close;
+ 	}
+@@ -1541,7 +1540,7 @@ get_cni_fd(char *if_name)
+ 	/* Request for "/version" */
+ 	strlcpy(request, UDS_VERSION_MSG, UDS_MAX_CMD_LEN);
+ 	memset(response, 0, sizeof(response));
+-	if (make_request_cni(sock, &server, request, NULL, response, &out_fd) < 0) {
++	if (make_request_cni(sock, &server, request, NULL, response, &out_fd, uds_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Error in processing cmd [%s]\n", request);
+ 		goto err_close;
+ 	}
+@@ -1549,7 +1548,7 @@ get_cni_fd(char *if_name)
+ 	/* Request for file descriptor for netdev name*/
+ 	snprintf(request, sizeof(request), "%s,%s", UDS_XSK_MAP_FD_MSG, if_name);
+ 	memset(response, 0, sizeof(response));
+-	if (make_request_cni(sock, &server, request, NULL, response, &out_fd) < 0) {
++	if (make_request_cni(sock, &server, request, NULL, response, &out_fd, uds_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Error in processing cmd [%s]\n", request);
+ 		goto err_close;
+ 	}
+@@ -1571,7 +1570,7 @@ get_cni_fd(char *if_name)
+ 	/* Initiate close connection */
+ 	strlcpy(request, UDS_FIN_MSG, UDS_MAX_CMD_LEN);
+ 	memset(response, 0, sizeof(response));
+-	if (make_request_cni(sock, &server, request, NULL, response, &out_fd) < 0) {
++	if (make_request_cni(sock, &server, request, NULL, response, &out_fd, uds_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Error in processing cmd [%s]\n", request);
+ 		goto err_close;
+ 	}
+@@ -1640,7 +1639,7 @@ xsk_configure(struct pmd_internals *internals, struct pkt_rx_queue *rxq,
+ #endif
+ 
+ 	/* Disable libbpf from loading XDP program */
+-	if (internals->use_cni)
++	if (strnlen(internals->uds_path, PATH_MAX))
+ 		cfg.libbpf_flags |= XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD;
+ 
+ 	if (strnlen(internals->prog_path, PATH_MAX)) {
+@@ -1694,18 +1693,17 @@ xsk_configure(struct pmd_internals *internals, struct pkt_rx_queue *rxq,
+ 		}
+ 	}
+ 
+-	if (internals->use_cni) {
+-		int err, fd, map_fd;
++	if (strnlen(internals->uds_path, PATH_MAX)) {
++		int err, map_fd;
+ 
+ 		/* get socket fd from CNI plugin */
+-		map_fd = get_cni_fd(internals->if_name);
++		map_fd = get_cni_fd(internals->if_name, internals->uds_path);
+ 		if (map_fd < 0) {
+ 			AF_XDP_LOG(ERR, "Failed to receive CNI plugin fd\n");
+ 			goto out_xsk;
+ 		}
+-		/* get socket fd */
+-		fd = xsk_socket__fd(rxq->xsk);
+-		err = bpf_map_update_elem(map_fd, &rxq->xsk_queue_idx, &fd, 0);
++
++		err = xsk_socket__update_xskmap(rxq->xsk, map_fd);
+ 		if (err) {
+ 			AF_XDP_LOG(ERR, "Failed to insert unprivileged xsk in map.\n");
+ 			goto out_xsk;
+@@ -1957,7 +1955,7 @@ parse_name_arg(const char *key __rte_unused,
+ 
+ /** parse xdp prog argument */
+ static int
+-parse_prog_arg(const char *key __rte_unused,
++parse_path_arg(const char *key __rte_unused,
+ 	       const char *value, void *extra_args)
+ {
+ 	char *path = extra_args;
+@@ -2023,7 +2021,7 @@ xdp_get_channels_info(const char *if_name, int *max_queues,
+ static int
+ parse_parameters(struct rte_kvargs *kvlist, char *if_name, int *start_queue,
+ 		 int *queue_cnt, int *shared_umem, char *prog_path,
+-		 int *busy_budget, int *force_copy, int *use_cni)
++		 int *busy_budget, int *force_copy, char *uds_path)
+ {
+ 	int ret;
+ 
+@@ -2050,7 +2048,7 @@ parse_parameters(struct rte_kvargs *kvlist, char *if_name, int *start_queue,
+ 		goto free_kvlist;
+ 
+ 	ret = rte_kvargs_process(kvlist, ETH_AF_XDP_PROG_ARG,
+-				 &parse_prog_arg, prog_path);
++				 &parse_path_arg, prog_path);
+ 	if (ret < 0)
+ 		goto free_kvlist;
+ 
+@@ -2064,8 +2062,8 @@ parse_parameters(struct rte_kvargs *kvlist, char *if_name, int *start_queue,
+ 	if (ret < 0)
+ 		goto free_kvlist;
+ 
+-	ret = rte_kvargs_process(kvlist, ETH_AF_XDP_USE_CNI_ARG,
+-				 &parse_integer_arg, use_cni);
++	ret = rte_kvargs_process(kvlist, ETH_AF_XDP_USE_CNI_UDS_PATH_ARG,
++				 &parse_path_arg, uds_path);
+ 	if (ret < 0)
+ 		goto free_kvlist;
+ 
+@@ -2108,7 +2106,7 @@ static struct rte_eth_dev *
+ init_internals(struct rte_vdev_device *dev, const char *if_name,
+ 	       int start_queue_idx, int queue_cnt, int shared_umem,
+ 	       const char *prog_path, int busy_budget, int force_copy,
+-	       int use_cni)
++		   const char *uds_path)
+ {
+ 	const char *name = rte_vdev_device_name(dev);
+ 	const unsigned int numa_node = dev->device.numa_node;
+@@ -2137,7 +2135,7 @@ init_internals(struct rte_vdev_device *dev, const char *if_name,
+ #endif
+ 	internals->shared_umem = shared_umem;
+ 	internals->force_copy = force_copy;
+-	internals->use_cni = use_cni;
++	strlcpy(internals->uds_path, uds_path, PATH_MAX);
+ 
+ 	if (xdp_get_channels_info(if_name, &internals->max_queue_cnt,
+ 				  &internals->combined_queue_cnt)) {
+@@ -2196,7 +2194,7 @@ init_internals(struct rte_vdev_device *dev, const char *if_name,
+ 	eth_dev->data->dev_link = pmd_link;
+ 	eth_dev->data->mac_addrs = &internals->eth_addr;
+ 	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+-	if (!internals->use_cni)
++	if (!strnlen(internals->uds_path, PATH_MAX))
+ 		eth_dev->dev_ops = &ops;
+ 	else
+ 		eth_dev->dev_ops = &ops_cni;
+@@ -2327,7 +2325,7 @@ rte_pmd_af_xdp_probe(struct rte_vdev_device *dev)
+ 	char prog_path[PATH_MAX] = {'\0'};
+ 	int busy_budget = -1, ret;
+ 	int force_copy = 0;
+-	int use_cni = 0;
++	char uds_path[PATH_MAX] = {'\0'};
+ 	struct rte_eth_dev *eth_dev = NULL;
+ 	const char *name = rte_vdev_device_name(dev);
+ 
+@@ -2370,20 +2368,20 @@ rte_pmd_af_xdp_probe(struct rte_vdev_device *dev)
+ 
+ 	if (parse_parameters(kvlist, if_name, &xsk_start_queue_idx,
+ 			     &xsk_queue_cnt, &shared_umem, prog_path,
+-			     &busy_budget, &force_copy, &use_cni) < 0) {
++				 &busy_budget, &force_copy, uds_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Invalid kvargs value\n");
+ 		return -EINVAL;
+ 	}
+ 
+-	if (use_cni && busy_budget > 0) {
++	if (strnlen(uds_path, PATH_MAX) && busy_budget > 0) {
+ 		AF_XDP_LOG(ERR, "When '%s' parameter is used, '%s' parameter is not valid\n",
+-			ETH_AF_XDP_USE_CNI_ARG, ETH_AF_XDP_BUDGET_ARG);
++			ETH_AF_XDP_USE_CNI_UDS_PATH_ARG, ETH_AF_XDP_BUDGET_ARG);
+ 		return -EINVAL;
+ 	}
+ 
+-	if (use_cni && strnlen(prog_path, PATH_MAX)) {
++	if (strnlen(uds_path, PATH_MAX) && strnlen(prog_path, PATH_MAX)) {
+ 		AF_XDP_LOG(ERR, "When '%s' parameter is used, '%s' parameter is not valid\n",
+-			ETH_AF_XDP_USE_CNI_ARG, ETH_AF_XDP_PROG_ARG);
++			ETH_AF_XDP_USE_CNI_UDS_PATH_ARG, ETH_AF_XDP_PROG_ARG);
+ 			return -EINVAL;
+ 	}
+ 
+@@ -2410,7 +2408,7 @@ rte_pmd_af_xdp_probe(struct rte_vdev_device *dev)
+ 
+ 	eth_dev = init_internals(dev, if_name, xsk_start_queue_idx,
+ 				 xsk_queue_cnt, shared_umem, prog_path,
+-				 busy_budget, force_copy, use_cni);
++				 busy_budget, force_copy, uds_path);
+ 	if (eth_dev == NULL) {
+ 		AF_XDP_LOG(ERR, "Failed to init internals\n");
+ 		return -1;
+@@ -2471,4 +2469,4 @@ RTE_PMD_REGISTER_PARAM_STRING(net_af_xdp,
+ 			      "xdp_prog=<string> "
+ 			      "busy_budget=<int> "
+ 			      "force_copy=<int> "
+-			      "use_cni=<int> ");
++			      "uds_path=<string> ");
+-- 
+2.41.0
+

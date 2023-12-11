@@ -112,7 +112,7 @@ ARG BESS_DPDK_BRANCH=dpdk-2011-focal
 RUN cd /build/bess && \
 	curl -s -L https://github.com/omec-project/bess/archive/${BESS_DPDK_BRANCH}.tar.gz | tar zx --strip-components=1 && \
 	./build.py dpdk && \
-	cp /build/bess/deps/dpdk-23.03/build/app/dpdk-testpmd /usr/local/bin/ && \
+	cp /build/bess/deps/dpdk-23.07/build/app/dpdk-testpmd /usr/local/bin/ && \
 	rm -rf /build/bess
 
 ENV CCACHE_DIR=/tmp/ccache
