@@ -344,7 +344,7 @@ def build_dpdk():
     if not os.path.exists('%s/build' % DPDK_DIR):
         configure_dpdk()
 
-    for f in glob.glob('%s/0001-net-af_xdp-enable-uds-path-instead-of-use_cni.patch' % DEPS_DIR):
+    for f in glob.glob('%s/afxdp_dp/*.patch' % DEPS_DIR):
         print('Applying patch %s' % f)
         cmd('patch -d %s -N -p1 < %s || true' % (DPDK_DIR, f), shell=True)
 
