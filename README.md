@@ -24,7 +24,7 @@ To install BESS on Linux quickly, you can download the binary from [Release](htt
 Documentation can be found [here](https://github.com/omec-project/bess/wiki/). Please consider [contributing](https://github.com/omec-project/bess/wiki/How-to-Contribute) to the project!!
 
 
-## DPDK 23.07 build
+## DPDK 23.03 build
 
 Start a docker container
 
