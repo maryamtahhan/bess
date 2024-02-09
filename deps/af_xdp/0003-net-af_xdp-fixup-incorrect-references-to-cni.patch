@@ -1,0 +1,113 @@
+From 34f12e06cb6d7048cc050107f8aabe29de32f21e Mon Sep 17 00:00:00 2001
+From: Maryam Tahhan <mtahhan@redhat.com>
+Date: Fri, 9 Feb 2024 06:46:16 -0500
+Subject: [PATCH 3/3] net/af_xdp: fixup incorrect references to cni
+
+Replace incorrect references to CNI with AF_XDP
+Device Plugin (DP) where appropriate while maintaining
+backwards compatibility.
+
+Signed-off-by: Maryam Tahhan <mtahhan@redhat.com>
+---
+ drivers/net/af_xdp/rte_eth_af_xdp.c | 28 ++++++++++++++--------------
+ 1 file changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/net/af_xdp/rte_eth_af_xdp.c b/drivers/net/af_xdp/rte_eth_af_xdp.c
+index dad9118c07..4c5790eaa2 100644
+--- a/drivers/net/af_xdp/rte_eth_af_xdp.c
++++ b/drivers/net/af_xdp/rte_eth_af_xdp.c
+@@ -1481,7 +1481,7 @@ read_msg(int sock, char *response, struct sockaddr_un *s, int *fd)
+ }
+ 
+ static int
+-make_request_cni(int sock, struct sockaddr_un *server, char *request,
++make_request_dp(int sock, struct sockaddr_un *server, char *request,
+ 		 int *req_fd, char *response, int *out_fd, const char *dp_path)
+ {
+ 	int rval;
+@@ -1518,7 +1518,7 @@ check_response(char *response, char *exp_resp, long size)
+ }
+ 
+ static int
+-get_cni_fd(char *if_name, const char *dp_path)
++get_xskmap_fd(char *if_name, const char *dp_path)
+ {
+ 	char request[UDS_MAX_CMD_LEN], response[UDS_MAX_CMD_RESP];
+ 	char hostname[MAX_LONG_OPT_SZ], exp_resp[UDS_MAX_CMD_RESP];
+@@ -1538,7 +1538,7 @@ get_cni_fd(char *if_name, const char *dp_path)
+ 	/* Initiates handshake to CNI send: /connect,hostname */
+ 	snprintf(request, sizeof(request), "%s,%s", UDS_CONNECT_MSG, hostname);
+ 	memset(response, 0, sizeof(response));
+-	if (make_request_cni(sock, &server, request, NULL, response, &out_fd, dp_path) < 0) {
++	if (make_request_dp(sock, &server, request, NULL, response, &out_fd, dp_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Error in processing cmd [%s]\n", request);
+ 		goto err_close;
+ 	}
+@@ -1552,7 +1552,7 @@ get_cni_fd(char *if_name, const char *dp_path)
+ 	/* Request for "/version" */
+ 	strlcpy(request, UDS_VERSION_MSG, UDS_MAX_CMD_LEN);
+ 	memset(response, 0, sizeof(response));
+-	if (make_request_cni(sock, &server, request, NULL, response, &out_fd, dp_path) < 0) {
++	if (make_request_dp(sock, &server, request, NULL, response, &out_fd, dp_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Error in processing cmd [%s]\n", request);
+ 		goto err_close;
+ 	}
+@@ -1560,7 +1560,7 @@ get_cni_fd(char *if_name, const char *dp_path)
+ 	/* Request for file descriptor for netdev name*/
+ 	snprintf(request, sizeof(request), "%s,%s", UDS_XSK_MAP_FD_MSG, if_name);
+ 	memset(response, 0, sizeof(response));
+-	if (make_request_cni(sock, &server, request, NULL, response, &out_fd, dp_path) < 0) {
++	if (make_request_dp(sock, &server, request, NULL, response, &out_fd, dp_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Error in processing cmd [%s]\n", request);
+ 		goto err_close;
+ 	}
+@@ -1582,7 +1582,7 @@ get_cni_fd(char *if_name, const char *dp_path)
+ 	/* Initiate close connection */
+ 	strlcpy(request, UDS_FIN_MSG, UDS_MAX_CMD_LEN);
+ 	memset(response, 0, sizeof(response));
+-	if (make_request_cni(sock, &server, request, NULL, response, &out_fd, dp_path) < 0) {
++	if (make_request_dp(sock, &server, request, NULL, response, &out_fd, dp_path) < 0) {
+ 		AF_XDP_LOG(ERR, "Error in processing cmd [%s]\n", request);
+ 		goto err_close;
+ 	}
+@@ -1710,7 +1710,7 @@ xsk_configure(struct pmd_internals *internals, struct pkt_rx_queue *rxq,
+ 
+         AF_XDP_LOG(INFO, "use_cni set: %s\n", internals->dp_path);
+ 		/* get socket fd from AF_XDP plugin */
+-		map_fd = get_cni_fd(internals->if_name, internals->dp_path);
++		map_fd = get_xskmap_fd(internals->if_name, internals->dp_path);
+ 		if (map_fd < 0) {
+ 			AF_XDP_LOG(ERR, "Failed to receive CNI plugin fd\n");
+ 			goto out_xsk;
+@@ -1910,13 +1910,13 @@ static const struct eth_dev_ops ops = {
+ 	.get_monitor_addr = eth_get_monitor_addr,
+ };
+ 
+-/* CNI option works in unprivileged container environment
+- * and ethernet device functionality will be reduced. So
+- * additional customiszed eth_dev_ops struct is needed
+- * for cni. Promiscuous enable and disable functionality
+- * is removed.
++/* ops_device_plugin option works in unprivileged container
++ * environment and ethernet device functionality will be
++ * reduced. So additional customized eth_dev_ops struct is needed
++ * for AF_XDP DP support. Promiscuous enable and disable
++ * functionality is removed.
+  **/
+-static const struct eth_dev_ops ops_cni = {
++static const struct eth_dev_ops ops_device_plugin = {
+ 	.dev_start = eth_dev_start,
+ 	.dev_stop = eth_dev_stop,
+ 	.dev_close = eth_dev_close,
+@@ -2241,7 +2241,7 @@ init_internals(struct rte_vdev_device *dev, const char *if_name,
+ 	if (!internals->use_cni || !internals->use_pinned_map)
+ 		eth_dev->dev_ops = &ops;
+ 	else
+-		eth_dev->dev_ops = &ops_cni;
++		eth_dev->dev_ops = &ops_device_plugin;
+ 
+ 	eth_dev->rx_pkt_burst = eth_af_xdp_rx;
+ 	eth_dev->tx_pkt_burst = eth_af_xdp_tx;
+-- 
+2.41.0
+

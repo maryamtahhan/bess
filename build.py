@@ -344,7 +344,7 @@ def build_dpdk():
     if not os.path.exists('%s/build' % DPDK_DIR):
         configure_dpdk()
 
-    for f in glob.glob('%s/0001-net-af_xdp-enable-a-sock-path-alongside-use_cni.patch' % DEPS_DIR):
+    for f in glob.glob('%s/af_xdp/*.patch' % DEPS_DIR):
         print('Applying patch %s' % f)
         cmd('patch -d %s -N -p1 < %s || true' % (DPDK_DIR, f), shell=True)
 
@@ -398,11 +398,13 @@ def generate_protobuf_files():
 def build_bess():
     check_essential()
 
+    if not os.path.exists('%s' % XDP_DIR):
+        build_xdp()
+
     if not os.path.exists('%s/build' % DPDK_DIR):
         build_dpdk()
 
     if not os.path.exists('%s/builddir' % CNDP_DIR):
-        build_xdp()
         build_cndp()
 
     generate_protobuf_files()
@@ -436,8 +438,8 @@ def build_kmod():
 
 
 def build_all():
-    build_dpdk()
     build_xdp()
+    build_dpdk()
     build_cndp()
     build_bess()
     build_kmod()
