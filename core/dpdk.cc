@@ -125,6 +125,8 @@ void init_eal(int dpdk_mb_per_socket, std::string nonworker_corelist) {
       "--no-pci",
   };
 
+  rte_args.Append({"--log-level", "pmd.net.af_xdp:debug"});
+
   if (FLAGS_iova != "")
     rte_args.Append({"--iova", FLAGS_iova});
 
