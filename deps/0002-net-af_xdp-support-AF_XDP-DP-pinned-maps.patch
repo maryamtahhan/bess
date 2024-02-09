@@ -1,4 +1,4 @@
-From 28ee9fb805ffe37dd07ec5d7595e09e99b153e3e Mon Sep 17 00:00:00 2001
+From e2b9b1acf4febb26399d8b633803ab17009c3638 Mon Sep 17 00:00:00 2001
 From: Maryam Tahhan <mtahhan@redhat.com>
 Date: Fri, 9 Feb 2024 06:39:51 -0500
 Subject: [PATCH 2/2] net/af_xdp: support AF_XDP DP pinned maps
@@ -625,7 +625,7 @@ index 0000000000..b2374a0fd3
 +2.41.0
 +
 diff --git a/drivers/net/af_xdp/rte_eth_af_xdp.c b/drivers/net/af_xdp/rte_eth_af_xdp.c
-index 0ade2b367c..760c6f8036 100644
+index 0ade2b367c..8f02ad215f 100644
 --- a/drivers/net/af_xdp/rte_eth_af_xdp.c
 +++ b/drivers/net/af_xdp/rte_eth_af_xdp.c
 @@ -83,8 +83,9 @@ RTE_LOG_REGISTER_DEFAULT(af_xdp_logtype, NOTICE);
@@ -865,10 +865,10 @@ index 0ade2b367c..760c6f8036 100644
 -	else
 -		eth_dev->dev_ops = &ops_cni;
 +	if (internals->use_cni || internals->use_pinned_map) {
-+        AF_XDP_LOG(INFO, "SETTING eth_dev->dev_ops = &ops_device_plugin\n");
++        AF_XDP_LOG(DEBUG, "SETTING eth_dev->dev_ops = &ops_device_plugin\n");
 +		eth_dev->dev_ops = &ops_device_plugin;
 +	} else {
-+        AF_XDP_LOG(INFO, "SETTING eth_dev->dev_ops = &ops_device_plugin\n");
++        AF_XDP_LOG(DEBUG, "SETTING eth_dev->dev_ops = &ops_device_plugin\n");
 +        eth_dev->dev_ops = &ops;
 +    }
  
